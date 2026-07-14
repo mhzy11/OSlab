@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Lab1 SW64 中断处理流程</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body { font-family: 'Segoe UI','Microsoft YaHei',sans-serif; max-width: 960px; margin: 40px auto; padding: 0 20px; background: #fff; color: #333; }
+  h1 { text-align: center; font-size: 24px; margin-bottom: 40px; }
+  h2 { font-size: 18px; color: #444; border-bottom: 2px solid #e0e0e0; padding-bottom: 6px; margin: 50px 0 20px; }
+  .mermaid { margin: 24px 0; display: flex; justify-content: center; }
+  hr { border: none; border-top: 1px solid #eee; margin: 50px 0; }
+  p.note { color: #888; font-size: 13px; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Lab1 SW64 中断与异常处理</h1>
+
+<!-- ========== 总览 ========== -->
+<h2>1. 总览：三个关键地址</h2>
+<div class="mermaid">
+flowchart LR
+    subgraph kern["内核 (kern_init)"]
+        direction TB
+        S1["trap_init()<br/>wrkgp + wrent<br/>把 entInt/entIF 写入 vcpucb"]
+        S2["clock_init()<br/>wrtimer(1)<br/>启动 oneshot 定时器"]
+        S3["intr_enable()<br/>swpipl(0)<br/>CPU 开中断"]
+        S1 --> S2 --> S3 --> S4["while(1)"]
+    end
+
+    subgraph hmc["hmcode"]
+        V["vcpucb"]
+    end
+
+    subgraph asm["汇编入口"]
+        EI["entInt (中断)"]
+        EF["entIF (异常)"]
+    end
+
+    S1 -->|"wrent"| V
+    V -->|"中断发生时跳转"| EI
+    V -->|"异常发生时跳转"| EF
+</div>
+
+<!-- ========== 中断 ========== -->
+<h2>2. 中断：时钟中断完整链路</h2>
+<div class="mermaid">
+sequenceDiagram
+    participant HW as 定时器
+    participant H as hmcode
+    participant ASM as entInt (汇编)
+    participant C as do_entInt (C)
+    participant RET as __trapret
+
+    HW->>H: 定时器到期
+    Note over H: 读 CSR__INT_STAT<br/>识别为时钟中断<br/>r16 = 9<br/>保存 PS/PC/GP/r16/r17/r18 到栈<br/>从 vcpucb 取 kgp 和 entInt 地址
+    H->>ASM: 跳转，r29=kgp
+    Note over ASM: SAVE_ALL: 保存 r0~r28<br/>cause = 0
+    ASM->>C: call trap(tf)
+
+    C->>C: wrtimer(1) 重设定时器
+    C->>C: ticks++
+    C->>C: 每100次打印
+
+    C->>RET: 返回
+    Note over RET: RESTORE_ALL: 恢复 r0~r28
+    RET->>H: HMC_rti
+    Note over H: 从栈恢复 PS/PC/GP/r16-r18
+    H->>HW: 返回 while(1)
+</div>
+
+<!-- ========== 异常 ========== -->
+<h2>3. 异常：断点与非法指令</h2>
+<div class="mermaid">
+flowchart TD
+    subgraph bp["断点"]
+        A1["sys_call 0x80"] --> B1["hmcode 识别"]
+        B1 --> C1["r16 = 0<br/>PC = 返回地址"]
+    end
+
+    subgraph ill["非法指令"]
+        A2[".long 0x7a000000"] --> B2["CPU 解码失败"]
+        B2 --> C2["QEMU EXCP_OPCDEC"]
+        C2 --> D2["hmcode opcdec.S"]
+        D2 --> E2["r16 = 4<br/>PC = 异常指令地址"]
+    end
+
+    C1 --> ENTER["entIF"]
+    E2 --> ENTER
+
+    ENTER --> SAVE["SAVE_ALL 保存 r0~r28<br/>cause = 3"]
+
+    SAVE --> TRAP{"trap(tf)<br/>cause == 0 ?"}
+
+    TRAP -->|"否 (异常)"| SWITCH{"tf->gpr.a0 ?"}
+
+    SWITCH -->|"0 (断点)"| BPH["打印 tf->gpr.pc-4<br/>不需要 +4<br/>hmcode 已保存返回地址"]
+
+    SWITCH -->|"4 (非法指令)"| OPD["打印 tf->gpr.pc<br/>tf->gpr.pc += 4<br/>跳过非法指令"]
+
+    BPH --> RT
+    OPD --> RT["__trapret<br/>RESTORE_ALL + HMC_rti"]
+</div>
+
+<!-- ========== 栈布局 ========== -->
+<h2>4. 栈上寄存器布局</h2>
+<div class="mermaid">
+block-beta
+    columns 1
+    block:stack
+        columns 1
+        r0["offset  0: r0  ← SAVE_ALL"]
+        r1["offset  1: r1"]
+        dots["..."]
+        r28["offset 28: r28"]
+        cause["offset 29: cause ← entInt/entIF 填入<br/><br/>"]
+        ps["offset 30: PS   ← hmcode<br/><br/>"]
+        pc["offset 31: PC   ← hmcode"]
+        gp["offset 32: GP   ← hmcode"]
+        a0["offset 33: r16  ← hmcode (a0 = 中断/异常类型)"]
+        a1["offset 34: r17  ← hmcode"]
+        a2["offset 35: r18  ← hmcode"]
+    end
+    style cause fill:#fff3cd
+    style ps fill:#d1ecf1
+    style pc fill:#d1ecf1
+    style gp fill:#d1ecf1
+    style a0 fill:#d1ecf1
+    style a1 fill:#d1ecf1
+    style a2 fill:#d1ecf1
+</div>
+
+<hr>
+<p class="note">
+蓝色 = hmcode 保存（共 6 槽位，48 字节） &nbsp;|&nbsp;
+黄色 = 汇编入口填入 &nbsp;|&nbsp;
+其余 = SAVE_ALL 保存（r0~r28，29 槽位）<br/>
+总计 36 槽位 × 8 字节 = 288 字节 = struct pushregs
+</p>
+
+<!-- ========== 对比 ========== -->
+<h2>5. SW64 vs RISC-V 中断机制对比</h2>
+<div class="mermaid">
+flowchart LR
+    subgraph riscv["RISC-V"]
+        direction TB
+        R1["CPU 硬件"] -->|"查 stvec CSR"| R2["__alltraps"]
+        R2 --> R3["SAVE_ALL"]
+        R3 --> R4["trap()"]
+        R4 --> R5["sret 返回"]
+    end
+
+    subgraph sw64["SW64"]
+        direction TB
+        S1["CPU 硬件"] -->|"中断信号"| S2["hmcode"]
+        S2 -->|"查 vcpucb"| S3["entInt / entIF"]
+        S3 --> S4["SAVE_ALL"]
+        S4 --> S5["trap()"]
+        S5 --> S6["HMC_rti 返回"]
+    end
+
+    style S2 fill:#ffe0e0
+</div>
+
+<p class="note">
+核心差异：SW64 多了一层 <b>hmcode</b>（红色），它负责保存部分上下文、区分中断类型、查找内核入口。<br/>
+内核必须通过 trap_init() 提前把 entInt/entIF 地址写入 hmcode 的 vcpucb。
+</p>
+
+<script>
+mermaid.initialize({
+    startOnLoad: true,
+    theme: 'default',
+    securityLevel: 'loose',
+    sequence: { showSequenceNumbers: false, diagramMarginX: 40, diagramMarginY: 20 },
+    flowchart: { useMaxWidth: true, htmlLabels: true },
+});
+</script>
+</body>
+</html>

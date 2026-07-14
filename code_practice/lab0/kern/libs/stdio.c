@@ -1,15 +1,25 @@
-#include <console.h>
 #include <defs.h>
 #include <stdio.h>
+#include <memlayout.h>
+
+/* kernel print buffer offset */
+static unsigned long printk_offset = 0;
 
 /* HIGH level console I/O */
 
 /* *
- * cputch - writes a single character @c to stdout, and it will
- * increace the value of counter pointed by @cnt.
+ * cputch - writes a single character @c to the kernel print buffer,
+ * and increments the value of counter pointed by @cnt.
+ * The kernel print buffer is at [KERNEL_PRINTK_BUFF_BASE, KERNEL_PRINTK_BUFF_BASE+1M).
  * */
 static void cputch(int c, int *cnt) {
-    cons_putc(c);
+    char *buf = (char *)(KERNEL_PRINTK_BUFF_BASE + printk_offset);
+    if (printk_offset >= (KERNEL_PRINTK_BUFF_SIZE - 1)) {
+        printk_offset = 0;
+        buf = (char *)KERNEL_PRINTK_BUFF_BASE;
+    }
+    *buf = (char)c;
+    printk_offset++;
     (*cnt)++;
 }
 
@@ -44,7 +54,15 @@ int cprintf(const char *fmt, ...) {
 }
 
 /* cputchar - writes a single character to stdout */
-void cputchar(int c) { cons_putc(c); }
+void cputchar(int c) {
+    char *buf = (char *)(KERNEL_PRINTK_BUFF_BASE + printk_offset);
+    if (printk_offset >= (KERNEL_PRINTK_BUFF_SIZE - 1)) {
+        printk_offset = 0;
+        buf = (char *)KERNEL_PRINTK_BUFF_BASE;
+    }
+    *buf = (char)c;
+    printk_offset++;
+}
 
 /* *
  * cputs- writes the string pointed by @str to stdout and
@@ -62,7 +80,6 @@ int cputs(const char *str) {
 
 /* getchar - reads a single non-zero character from stdin */
 int getchar(void) {
-    int c;
-    while ((c = cons_getc()) == 0) /* do nothing */;
-    return c;
+    /* Not supported: no console input in minimal kernel */
+    return 0;
 }

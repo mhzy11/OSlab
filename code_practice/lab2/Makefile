@@ -5,17 +5,7 @@ SLASH	:= /
 
 V       := @
 
-#ifndef GCCPREFIX
-GCCPREFIX := riscv64-unknown-elf-
-#endif
-
-ifndef QEMU
-QEMU := qemu-system-riscv64
-endif
-
-ifndef SPIKE
-SPIKE := spike
-endif
+GCCPREFIX := sw_64sw6b-sunway-linux-gnu-
 
 # eliminate default suffix rules
 .SUFFIXES: .c .S .h
@@ -30,13 +20,12 @@ HOSTCFLAGS	:= -Wall -O2
 GDB		:= $(GCCPREFIX)gdb
 
 CC		:= $(GCCPREFIX)gcc
-CFLAGS  := -mcmodel=medany -std=gnu99 -Wno-unused -Werror 
+CFLAGS  := -G 0 -fno-common -std=gnu99 -Wno-unused -Werror
 CFLAGS	+= -fno-builtin -Wall -O2 -nostdinc $(DEFS)
 CFLAGS	+= -fno-stack-protector -ffunction-sections -fdata-sections
-CFLAGS2 = $(CFLAGS) -D ucore_test
 CTYPE	:= c S
 LD      := $(GCCPREFIX)ld
-LDFLAGS	:= -m elf64lriscv
+LDFLAGS	:= -m elf64sw_64
 LDFLAGS	+= -nostdlib --gc-sections
 
 OBJCOPY := $(GCCPREFIX)objcopy
@@ -65,7 +54,6 @@ listf_cc = $(call listf,$(1),$(CTYPE))
 
 # for cc
 add_files_cc = $(call add_files,$(1),$(CC),$(CFLAGS) $(3),$(2),$(4))
-add_files_cc2 = $(call add_files,$(1),$(CC),$(CFLAGS2) $(3),$(2),$(4))
 create_target_cc = $(call create_target,$(1),$(2),$(3),$(CC),$(CFLAGS))
 
 # for hostcc
@@ -99,7 +87,7 @@ KINCLUDE	+= kern/debug/ \
 			   kern/driver/ \
 			   kern/trap/ \
 			   kern/mm/ \
-			   kern/arch/
+			   kern/sync/
 
 KSRCDIR		+= kern/init \
 			   kern/libs \
@@ -110,12 +98,15 @@ KSRCDIR		+= kern/init \
 
 KCFLAGS		+= $(addprefix -I,$(KINCLUDE))
 
-ifeq ($(MAKECMDGOALS),test)
-$(call add_files_cc2,$(call listf_cc,$(KSRCDIR)),kernel,$(KCFLAGS))
-else
 $(call add_files_cc,$(call listf_cc,$(KSRCDIR)),kernel,$(KCFLAGS))
-endif
+
 KOBJS	= $(call read_packet,kernel libs)
+
+# SW64 has no hardware division
+KOBJS += libs/__divlu.o
+KOBJS += libs/__remlu.o
+KOBJS += libs/__divwu.o
+KOBJS += libs/__remwu.o
 
 # create kernel target
 kernel = $(call totarget,kernel)
@@ -133,7 +124,6 @@ $(call create_target,kernel)
 # -------------------------------------------------------------------
 # create ucore.img
 UCOREIMG	:= $(call totarget,ucore.img)
-
 
 $(UCOREIMG): $(kernel)
 	$(OBJCOPY) $(kernel) --strip-all -O binary $@
@@ -160,22 +150,17 @@ endif
 TARGETS: $(TARGETS)
 
 .DEFAULT_GOAL := TARGETS
-.PHONY: qemu spike test
-qemu: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
-	$(V)$(QEMU) \
-		-machine virt \
-		-nographic \
-		-bios default \
-		-device loader,file=$(UCOREIMG),addr=0x80200000
 
-test: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
+.PHONY: qemu
+QEMU := /media/sf_shared/qemu-bin/qemu-system-sw64
+
+qemu: $(kernel)
 	$(V)$(QEMU) \
-		-machine virt \
-		-nographic \
-		-bios default \
-		-device loader,file=$(UCOREIMG),addr=0x80200000
-spike: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
-	$(V)$(SPIKE) $(UCOREIMG)
+		-smp 1 \
+		-machine core3 \
+		-m 512m \
+		-kernel $(kernel) \
+		-monitor stdio
 
 .PHONY: grade touch
 
@@ -216,5 +201,5 @@ tags:
 	@echo TAGS ALL
 	$(V)rm -f cscope.files cscope.in.out cscope.out cscope.po.out tags
 	$(V)find . -type f -name "*.[chS]" >cscope.files
-	$(V)cscope -bq 
+	$(V)cscope -bq
 	$(V)ctags -L cscope.files

@@ -1,4 +1,4 @@
-PROJ	:= lab1
+PROJ	:= lab0
 EMPTY	:=
 SPACE	:= $(EMPTY) $(EMPTY)
 SLASH	:= /
@@ -6,11 +6,11 @@ SLASH	:= /
 V       := @
 
 #ifndef GCCPREFIX
-GCCPREFIX := riscv64-unknown-elf-
+GCCPREFIX := sw_64sw6b-sunway-linux-gnu-
 #endif
 
 ifndef QEMU
-QEMU := qemu-system-riscv64
+QEMU := /media/sf_shared/qemu-bin/qemu-system-sw64
 endif
 
 
@@ -27,13 +27,13 @@ HOSTCFLAGS	:= -Wall -O2
 GDB		:= $(GCCPREFIX)gdb
 
 CC		:= $(GCCPREFIX)gcc
-CFLAGS  := -mcmodel=medany -std=gnu99 -Wno-unused -Werror
+CFLAGS  := -std=gnu99 -Wno-unused -Werror
 CFLAGS	+= -fno-builtin -Wall -O2 -nostdinc $(DEFS)
 CFLAGS	+= -fno-stack-protector -ffunction-sections -fdata-sections
 CTYPE	:= c S
 
 LD      := $(GCCPREFIX)ld
-LDFLAGS	:= -m elf64lriscv
+LDFLAGS	:= -m elf64sw_64
 LDFLAGS	+= -nostdlib --gc-sections
 
 OBJCOPY := $(GCCPREFIX)objcopy
@@ -80,7 +80,7 @@ match = $(shell echo $(2) | $(AWK) '{for(i=1;i<=NF;i++){if(match("$(1)","^"$$(i)
 # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 # include kernel/user
 
-INCLUDE	+= libs 
+INCLUDE	+= libs
 
 CFLAGS	+= $(addprefix -I,$(INCLUDE))
 
@@ -91,18 +91,11 @@ $(call add_files_cc,$(call listf_cc,$(LIBDIR)),libs,)
 # -------------------------------------------------------------------
 # kernel
 
-KINCLUDE	+= kern/debug/ \
-			   kern/driver/ \
-			   kern/trap/ \
-			   kern/libs/\
-			   kern/mm/ \
-			   kern/arch/
+KINCLUDE	+= kern/mm/ \
+			   kern/libs/
 
 KSRCDIR		+= kern/init \
-			   kern/debug \
 			   kern/libs \
-			   kern/driver \
-			   kern/trap \
 			   kern/mm
 
 KCFLAGS		+= $(addprefix -I,$(KINCLUDE))
@@ -110,6 +103,12 @@ KCFLAGS		+= $(addprefix -I,$(KINCLUDE))
 $(call add_files_cc,$(call listf_cc,$(KSRCDIR)),kernel,$(KCFLAGS))
 
 KOBJS	= $(call read_packet,kernel libs)
+
+# Add the pre-compiled division .o files (SW64 has no hardware division)
+KOBJS += libs/__divlu.o
+KOBJS += libs/__remlu.o
+KOBJS += libs/__divwu.o
+KOBJS += libs/__remwu.o
 
 # create kernel target
 kernel = $(call totarget,kernel)
@@ -155,14 +154,14 @@ TARGETS: $(TARGETS)
 
 .DEFAULT_GOAL := TARGETS
 
-.PHONY: qemu 
-qemu: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
-#	$(V)$(QEMU) -kernel $(UCOREIMG) -nographic
+.PHONY: qemu
+qemu: $(kernel)
 	$(V)$(QEMU) \
-		-machine virt \
-		-nographic \
-		-bios default \
-		-device loader,file=$(UCOREIMG),addr=0x80200000
+		-smp 1 \
+		-machine core3 \
+		-m 512m \
+		-kernel $(kernel) \
+		-monitor stdio
 
 .PHONY: grade touch
 
@@ -203,5 +202,5 @@ tags:
 	@echo TAGS ALL
 	$(V)rm -f cscope.files cscope.in.out cscope.out cscope.po.out tags
 	$(V)find . -type f -name "*.[chS]" >cscope.files
-	$(V)cscope -bq 
+	$(V)cscope -bq
 	$(V)ctags -L cscope.files

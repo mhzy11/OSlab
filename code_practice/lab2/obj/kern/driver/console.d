@@ -1,0 +1,3 @@
+obj/kern/driver/console.o obj/kern/driver/console.d: \
+ kern/driver/console.c kern/driver/console.h kern/mm/memlayout.h \
+ libs/defs.h libs/atomic.h libs/list.h
